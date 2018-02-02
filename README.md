@@ -10,17 +10,24 @@
   $ go get github.com/mendoncaangelo/grpc_crawler
   ```
 
-  Make sure you have go installed and the GOPATH set. 
-  
+  Make sure you have go installed and the GOPATH set.
+
+  (You're trusting that these packages won't have breaking changes. I would instead use vendoring. I use `github.com/FiloSottile/gvt`, though there are other options
+  Then you just run `gvt fetch github.com/codegangsta/cli` and `gvt fetch github.com/codegangsta/cli` and then add the contents of the newly created 'vendor' folder to your repo)
+
   You need to get "github.com/codegangsta/cli"
   go get -u github.com/codegangsta/cli
 
   git clone git@github.com/mendoncaangelo/grpc_crawler.git $GOPATH/src/
 
 
-## Usage 
+## Usage
+
+  ### start the local server
+  (what is in the code block should be only the shell command. ditto for below)
+  (if the user ran `go get github.com/mendoncaangelo/grpc_crawler`, then the binaries would be in their $GOBIN folder, so they wouldn't need to use `go run`)
   ```
-  go run server.go -- will start the local server
+  go run server.go
   ```
 
   ```
@@ -32,7 +39,7 @@
   ```
 
   ```
-  go run client.go list -- will list the urls crawled so far. 
+  go run client.go list -- will list the urls crawled so far.
   ```
 
   To stop a specific site crawler
@@ -45,10 +52,10 @@
   e.g. go run client.go start www.nodejs.org
   ```
 
-  You can stop one of the crawlers and have the other one running. 
+  You can stop one of the crawlers and have the other one running.
   ```
   e.g. go run client.go stop www.hashicorp.com
   ```
 
 ## Enhancements
-  Some of the parsing of links needs to be improved. Already visited URLs need to be ignored. 
+  Some of the parsing of links needs to be improved. Already visited URLs need to be ignored.

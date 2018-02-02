@@ -22,17 +22,8 @@ type server struct {
 	spiderPtr *crawlerDS
 }
 
-// Crawler Interface...
-type Crawler interface {
-	pushURLToWaitingList(string, int, *chan int)
-	parseLinks(*string, string, int, *chan int)
-	crawler(string, int, *chan int)
-
-	parseURL(string) (bool, string)
-	listURLS() []string
-	startCrawling()
-	initHTTPRequestCapacity()
-}
+// (Crawler type was not being used, and your spiderPtr isn't being used like an interface in your main
+// function since you are directly accessing its struct fields, so you can't use dependency injection)
 
 type linkIndex struct {
 	index int
@@ -54,14 +45,25 @@ type crawlerDS struct {
 	waitingUrls chan linkIndex
 
 	// URL to Index Mapper
-	siteURLIndex map[string]*linkIndex
+	siteURLIndex map[string]*linkIndex // This doesn't need to be a pointer
 
 	// Index to URL Mapper
 	siteIndexURL map[int]string
 	// Crawler Specific channel terminator
-	terminate []*chan int
+	terminate []*chan int // Doesn't need to be pointer
 	// Number of sites being crawled
 	siteIndex int
+}
+
+func newCrawler() crawlerDS {
+	return crawlerDS{visitedUrls: make(map[string]bool),
+		urlOnChannel: make(map[string]bool),
+		siteURLIndex: make(map[string]*linkIndex),
+		siteIndex:    0,
+		finishedUrls: make(chan string),
+		siteIndexURL: make(map[int]string),
+		waitingUrls:  make(chan linkIndex),
+		terminate:    make([]*chan int, 0)}
 }
 
 var (
@@ -69,18 +71,13 @@ var (
 	mapLock                     = sync.RWMutex{}
 	newsites                    = make(chan string, 1)
 	shutdownSpecificSiteCrawler = make(chan linkIndex, 1)
-	httpLimitChannel            = make(chan int, concurrentRequests)
+	httpLimitChannel            = make(chan struct{}, concurrentRequests)
 )
 
-func (c *crawlerDS) initHTTPRequestCapacity() {
-	for i := 0; i < concurrentRequests; i++ {
-		httpLimitChannel <- 1
-	}
-	return
-}
+// initHTTPRequestCapacity is not needed. Just send on the value first and receive when you are done. see below
 
 // Method to find if uri has scheme and extract the hostname
-func (c *crawlerDS) parseURL(uri string) (bool, string) {
+func (c *crawlerDS) parseURL(uri string) (bool, string) { // It's idiomatic to indicate success with the second return value instead of the first
 	pg, err := url.Parse(uri)
 	if err != nil {
 		log.Fatal(err)
@@ -93,6 +90,7 @@ func (c *crawlerDS) parseURL(uri string) (bool, string) {
 }
 
 // pushes the new urls to the waiting urls channel to be processed
+// Funcion not necessary - move contents to parseLinks
 func (c *crawlerDS) pushURLToWaitingList(url string, index int, shutdown *chan int) {
 
 	select {
@@ -105,11 +103,13 @@ func (c *crawlerDS) pushURLToWaitingList(url string, index int, shutdown *chan i
 }
 
 // Method that processes the href's in the crawled page
+// 'data' shouldn't be a pointer unless you want this function to update it for the caller
 func (c *crawlerDS) parseLinks(data *string, pageURL string, index int, shutdown *chan int) {
 
 	defer wg.Done()
 	u, err := url.Parse(pageURL)
 	if err != nil {
+		// Do you really want to stop the entire service if a url can't be parsed? Ditto with all the other 'log.Fatal' calls
 		log.Fatal(err)
 	}
 	re := regexp.MustCompile("href=\"(.*?)\"")
@@ -142,16 +142,17 @@ func (c *crawlerDS) crawler(url string, index int, shutdown *chan int) {
 
 	defer wg.Done()
 	// This will limit the number of HTTP requests.
-	<-httpLimitChannel
+	httpLimitChannel <- struct{}{} // It is idiomatic to use an empty struct channel if you don't actually care about the value sent on a channel
 	resp, err := http.Get(url)
-	httpLimitChannel <- 1
+	<-httpLimitChannel
 
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(err) // log.Println(err)
+		// return here and get rid of the 'else' below
 	} else {
 		select {
-		case _ = <-*shutdown:
-			return
+		case <-*shutdown:
+			return // The shutdown is handled here, no need to pass it on to c.parseLinks below
 		default:
 			// push the crawled url onto the finishedURL channel
 			c.finishedUrls <- url
@@ -162,13 +163,14 @@ func (c *crawlerDS) crawler(url string, index int, shutdown *chan int) {
 			}
 			msg := string(body)
 			wg.Add(1)
+			// no reason to use a goroutine since crawler is about to return anyway and parseLinks contains no async actions
 			go c.parseLinks(&msg, url, index, shutdown)
 		}
-
 	}
 }
 
 // Method to print the site tree.
+// This method doesn't save you much space since you just range over the resulting array in ListVisitedUrls. I would get rid of it and range over the map directly in ListVisitedUrls
 func (c *crawlerDS) listURLS() []string {
 	mapLock.RLock()
 	defer mapLock.RUnlock()
@@ -181,21 +183,19 @@ func (c *crawlerDS) listURLS() []string {
 }
 
 func (c *crawlerDS) startCrawling() {
+	// The waitgroup doesn't look to be doing anything since you can never break out of the for loop below
 	defer wg.Done()
 	wg.Add(1)
-	// Initialize the request throttler channel
-	go c.initHTTPRequestCapacity()
 
 	for {
 		select {
 
-		case finURL, ok := <-c.finishedUrls:
-			if ok {
-				fmt.Println("Crawled URL", finURL)
-				mapLock.Lock()
-				c.visitedUrls[finURL] = true
-				mapLock.Unlock()
-			}
+		// unless the c.finishedUrls channel can be closed, you do not need to check 'ok'
+		case finURL := <-c.finishedUrls:
+			fmt.Println("Crawled URL", finURL)
+			mapLock.Lock()
+			c.visitedUrls[finURL] = true
+			mapLock.Unlock()
 		case obj := <-c.waitingUrls:
 			wg.Add(1)
 			go c.crawler(obj.url, obj.index, c.terminate[obj.index])
@@ -229,6 +229,7 @@ func (c *crawlerDS) startCrawling() {
 		}
 
 	}
+	// If you run go vet it will tell you this code is unreachable
 	wg.Wait()
 
 }
@@ -284,14 +285,7 @@ func main() {
 
 	// Creates a new gRPC server
 	srvr := grpc.NewServer()
-	ds := crawlerDS{visitedUrls: make(map[string]bool),
-		urlOnChannel: make(map[string]bool),
-		siteURLIndex: make(map[string]*linkIndex),
-		siteIndex:    0,
-		finishedUrls: make(chan string),
-		siteIndexURL: make(map[int]string),
-		waitingUrls:  make(chan linkIndex),
-		terminate:    make([]*chan int, 0)}
+	ds := newCrawler()
 
 	wg.Add(1)
 	go ds.startCrawling()
